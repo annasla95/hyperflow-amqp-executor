@@ -1,11 +1,15 @@
 require "influxdb"
 require 'thread'
+require 'prometheus/client'
+require 'net/http'
+
+require_relative 'prometheus_loger'
 
 module Executor
 
     class DatabaseLoger
 
-        def initialize(database_url,id,jobId,procId,hfId,wfid,jobExecutable)
+        def initialize(database_url, prometheus_gateway_url, id,jobId,procId,hfId,wfid,jobExecutable)
             @id = id
             @jobId = jobId
             @hfId = hfId
@@ -22,6 +26,21 @@ module Executor
             @stageStartTime =nil
 
             @influxdb = nil
+
+            @registry = Prometheus::Client.registry
+            @prometheus_gateway = Prometheus::Client::Push.new('amqp-executor', id, prometheus_gateway_url)
+
+            @execution_times_running_time_gauge = Prometheus::Client::Gauge.new(:execution_times_running_time, 'execution_times_running_time')
+            @execution_times_downloading_time_gauge = Prometheus::Client::Gauge.new(:execution_times_downloading_time, 'execution_times_downloading_time')
+            @execution_times_execution_time_gauge = Prometheus::Client::Gauge.new(:execution_times_execution_time, 'execution_times_execution_time')
+            @execution_times_uploading_time_gauge = Prometheus::Client::Gauge.new(:execution_times_uploading_time, 'execution_times_uploading_time')
+
+            @registry.register(@execution_times_running_time_gauge)
+            @registry.register(@execution_times_downloading_time_gauge)
+            @registry.register(@execution_times_execution_time_gauge)
+            @registry.register(@execution_times_uploading_time_gauge)
+
+            @prometheus_gateway.add(@registry)
 
             if database_url.nil? || database_url.eql?("")
                 @influxdb = nil
@@ -56,12 +75,12 @@ module Executor
         @semaphore = Mutex.new
 
         def log_start_job()
-            
+
                 @startTime =Time.now
                 @stagesTime = Hash.new
                 self.log_time_of_stage_change
                 self.changeStageAndSubStage("running","init")
-            
+
         end
 
         def log_finish_job()
@@ -78,7 +97,7 @@ module Executor
             #Executor::logger.debug Time.now
             if (@subStage =="idle")
                 @stageStartTime=Time.now
-            else 
+            else
                 @stagesTime[@subStage] = Time.now - @stageStartTime
                 @stageStartTime=Time.now
             end
@@ -103,12 +122,30 @@ module Executor
                 runing_time = Time.now - @startTime
 
                 data = {
-                    values: { runing_time: runing_time, downloading_time: @stagesTime["stage_in"] , 
+                    values: { runing_time: runing_time, downloading_time: @stagesTime["stage_in"] ,
                     execution_time: @stagesTime["execution"] , uploading_time: @stagesTime["stage_out"]},
                     tags:   { wfid: @wfid, hfId: @hfId, workerId: @id , jobId: @jobId, procId: @procId}
                 }
                 #Executor::logger.debug "write to database #{data}"
                 @influxdb.write_point(metric, data)
+
+                @execution_times_running_time_gauge.set(
+                    { wfid: @wfid, hfId: @hfId, workerId: @id , jobId: @jobId, procId: @procId},
+                    runing_time
+                )
+                @execution_times_downloading_time_gauge.set(
+                    { wfid: @wfid, hfId: @hfId, workerId: @id , jobId: @jobId, procId: @procId},
+                    @stagesTime["stage_in"]
+                )
+                @execution_times_execution_time_gauge.set(
+                    { wfid: @wfid, hfId: @hfId, workerId: @id , jobId: @jobId, procId: @procId},
+                    @stagesTime["execution"]
+                )
+                @execution_times_uploading_time_gauge.set(
+                    { wfid: @wfid, hfId: @hfId, workerId: @id , jobId: @jobId, procId: @procId},
+                    @stagesTime["stage_out"]
+                )
+                @prometheus_gateway.add(@registry)
             end
         end
 

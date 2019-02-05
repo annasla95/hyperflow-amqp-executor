@@ -9,7 +9,7 @@ module Executor
       @job = job
       @id = id
 
-      @dataLoger = DatabaseLoger.new(ENV['INFLUXDB_URL'],Executor::id,@id,@job.options.procId,@job.options.hfId, @job.options.wfid,@job.executable)
+      @dataLoger = DatabaseLoger.new(ENV['INFLUXDB_URL'], ENV['PROMETHEUS_PUSHGATEWAY'], Executor::id,@id,@job.options.procId,@job.options.hfId, @job.options.wfid,@job.executable)
 
       @metrics = {
               timestamps: { },
@@ -54,7 +54,7 @@ module Executor
         if self.respond_to? :stage_in
           publish_events "stage_in" do
             _ , @metrics[:stage_in]     = time do
-              
+
               @job.inputs.each do |input|
                 stage_in input
               end
